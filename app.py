@@ -857,7 +857,11 @@ if uploaded_file is not None:
     )
 
     fig2.update_traces(texttemplate='%{text}', textposition='outside')
-    fig2.update_layout(xaxis_title="Negara", yaxis_title="Jumlah")
+
+    max_value = max(top_10_country["Jumlah"])
+    y_range_max = max_value * 1.2
+    
+    fig2.update_layout(xaxis_title="Negara", yaxis_title="Jumlah", yaxis=dict(range=[0, y_range_max]))
 
     # ========================
     # 3. MAP KOTA PERUSAHAAN EKSPOR
@@ -917,9 +921,14 @@ if uploaded_file is not None:
     )
     
     fig4.update_traces(texttemplate='%{text}', textposition='outside')
+
+    max_value = max(top_10_company["Jumlah"])
+    y_range_max = max_value * 1.2
+    
     fig4.update_layout(
         xaxis_title="Perusahaan",
-        yaxis_title="Jumlah"
+        yaxis_title="Jumlah",
+        yaxis=dict(range=[0, y_range_max])
     )
 
     # ========================
