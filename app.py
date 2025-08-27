@@ -6,11 +6,14 @@ import pycountry
 from datetime import datetime, date
 import plotly.io as pio
 from reportlab.lib.pagesizes import letter, A4
-from reportlab.platypus import SimpleDocTemplate, Image, Paragraph, Spacer, PageBreak
+from reportlab.platypus import SimpleDocTemplate, Image, Paragraph, Spacer, PageBreak, BaseDocTemplate, PageTemplate, Frame
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
 from reportlab.lib.enums import TA_CENTER, TA_LEFT
 from reportlab.platypus import HRFlowable
+from reportlab.pdfgen import canvas
+from reportlab.platypus.doctemplate import PageTemplate
+from reportlab.platypus.frames import Frame
 import io
 import base64
 import tempfile
@@ -48,22 +51,131 @@ def safe_write_image(fig, format="png", width=800, height=600, scale=2):
         else:
             raise
 
-def create_pdf_report(figures_dict, date_range, total_records, filtered_records):
+class LogoCanvas(canvas.Canvas):
+    """Canvas yang benar untuk menambahkan logo"""
+    
+    def __init__(self, *args, logo_path=None, **kwargs):
+        canvas.Canvas.__init__(self, *args, **kwargs)
+        self.logo_path = logo_path
+        self._saved = False  # Flag untuk mencegah duplikasi
+    
+    def save(self):
+        """Override save untuk memastikan logo digambar terakhir"""
+        if not self._saved:
+            self.draw_logo()
+            self._saved = True
+        canvas.Canvas.save(self)
+    
+    def showPage(self):
+        """Override showPage - ini yang paling penting"""
+        # Gambar logo SEBELUM showPage dipanggil
+        if self.logo_path and os.path.exists(self.logo_path):
+            self.draw_logo_immediate()
+        canvas.Canvas.showPage(self)
+    
+    def draw_logo_immediate(self):
+        """Menggambar logo langsung tanpa pengecekan berulang"""
+        try:
+            logo_x = 35  # Sedikit lebih ke kanan
+            logo_y = A4[1] - 85  # Sedikit lebih ke bawah
+            logo_width = 110
+            logo_height = 55
+            
+            # Gambar langsung
+            self.drawImage(
+                self.logo_path, 
+                logo_x, logo_y, 
+                width=logo_width, 
+                height=logo_height,
+                mask='auto'
+            )
+            print(f"Logo drawn at ({logo_x}, {logo_y})")
+            
+        except Exception as e:
+            print(f"Error drawing logo: {e}")
+    
+    def draw_logo(self):
+        """Metode fallback"""
+        if self.logo_path and os.path.exists(self.logo_path):
+            self.draw_logo_immediate()
+
+def create_logo_page_template(logo_path):
+    """Membuat page template dengan logo"""
+    def draw_logo_on_canvas(canvas, doc):
+        """Fungsi untuk menggambar logo pada setiap halaman"""
+        if logo_path and os.path.exists(logo_path):
+            try:
+                canvas.drawImage(
+                    logo_path,
+                    35, A4[1] - 85,  # Posisi
+                    width=110, height=55,
+                    mask='auto'
+                )
+            except Exception as e:
+                print(f"Template logo error: {e}")
+    
+    # Buat frame untuk konten (sisakan ruang untuk logo)
+    frame = Frame(
+        x1=72, y1=18, 
+        width=A4[0]-144, height=A4[1]-125,  # Kurangi tinggi untuk logo
+        leftPadding=0, rightPadding=0, 
+        topPadding=0, bottomPadding=0
+    )
+    
+    # Buat page template
+    template = PageTemplate(
+        id='logo_template',
+        frames=[frame],
+        onPage=draw_logo_on_canvas
+    )
+    
+    return template
+
+def create_pdf_report(figures_dict, date_range, total_records, filtered_records, logo_path=None):
     """
     Membuat laporan PDF dari semua chart yang ada di dashboard
     """
     # Buffer untuk menyimpan PDF
     buffer = io.BytesIO()
-    
-    # Buat dokumen PDF
-    doc = SimpleDocTemplate(
-        buffer,
-        pagesize=A4,
-        rightMargin=72,
-        leftMargin=72,
-        topMargin=72,
-        bottomMargin=18
-    )
+
+    # DEBUG: Print info logo path
+    if logo_path:
+        print(f"DEBUG: Logo path yang diberikan: {logo_path}")
+        print(f"DEBUG: Logo file exists: {os.path.exists(logo_path)}")
+        if os.path.exists(logo_path):
+            print(f"DEBUG: Logo file size: {os.path.getsize(logo_path)} bytes")
+        else:
+            print(f"DEBUG: Current working directory: {os.getcwd()}")
+            print(f"DEBUG: Files in current directory: {os.listdir('.')}")
+
+    # Buat dokumen PDF dengan custom canvas HANYA jika ada logo
+    if logo_path and os.path.exists(logo_path):
+        print("Using PageTemplate method for logo")
+        
+        # Gunakan BaseDocTemplate untuk kontrol penuh
+        doc = BaseDocTemplate(
+            buffer,
+            pagesize=A4,
+            rightMargin=72,
+            leftMargin=72,
+            topMargin=90,  # Beri ruang untuk logo
+            bottomMargin=18
+        )
+        
+        # Tambahkan page template dengan logo
+        logo_template = create_logo_page_template(logo_path)
+        doc.addPageTemplates([logo_template])
+        
+    else:
+        print("No logo - using standard template")
+        doc = SimpleDocTemplate(
+            buffer,
+            pagesize=A4,
+            rightMargin=72,
+            leftMargin=72,
+            topMargin=72,
+            bottomMargin=18
+        )
     
     # Style untuk dokumen
     styles = getSampleStyleSheet()
@@ -202,7 +314,9 @@ def create_pdf_report(figures_dict, date_range, total_records, filtered_records)
     story.append(Paragraph(footer_text, footer_style))
     
     # Build PDF
+    print("DEBUG: Membangun PDF...")
     doc.build(story)
+    print("DEBUG: PDF selesai dibangun")
     
     # Return buffer
     buffer.seek(0)
@@ -309,24 +423,34 @@ def create_excel_report(df_filtered, date_range, total_records, filtered_records
 # ========================
 # DASHBOARD STREAMLIT
 # ========================
-st.set_page_config(page_title="Dashboard Ekspor", layout="wide")
+st.set_page_config(page_title="Dashboard OMKABA", layout="wide")
 
-st.markdown("""
-<div style="text-align: center; padding: 20px 0; background: linear-gradient(90deg, #f8f9fa 0%, #e9ecef 50%, #f8f9fa 100%); border-radius: 10px; margin-bottom: 30px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
-    <div style="font-size: 48px; margin-bottom: 10px;">
-        ✈️ 🚢 📦 🌍
+col1, col2, col3 = st.columns([1, 4, 1])
+
+with col1:
+    st.image("bbkksby_upscaled.png", width=150)  # Uncomment jika menggunakan file lokal
+    pass
+
+with col2:
+    st.markdown("""
+    <div style="text-align: center; padding: 20px 0; background: linear-gradient(90deg, #f8f9fa 0%, #e9ecef 50%, #f8f9fa 100%); border-radius: 10px; margin-bottom: 30px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+        <div style="font-size: 48px; margin-bottom: 10px;">
+            ✈️ 🚢 📦 🌍
+        </div>
+        <h1 style="color: #3EADB3; margin: 0; font-family: 'Arial', sans-serif; font-weight: bold; text-shadow: 1px 1px 2px rgba(0,0,0,0.1);">
+            📊 Dashboard BBKK Surabaya
+        </h1>
+        <p style="color: #9E6B2B; margin: 10px 0 0 0; font-style: italic; font-size: 20px;">
+            Analisis Ekspor OMKABA BBKK Surabaya
+        </p>
+        <div style="margin-top: 15px; font-size: 24px;">
+            📈 📋 🗺️
+        </div>
     </div>
-    <h1 style="color: #3EADB3; margin: 0; font-family: 'Arial', sans-serif; font-weight: bold; text-shadow: 1px 1px 2px rgba(0,0,0,0.1);">
-        📊 Dashboard BBKK Surabaya
-    </h1>
-    <p style="color: #9E6B2B; margin: 10px 0 0 0; font-style: italic; font-size: 20px;">
-        Analisis Ekspor OMKABA BBKK Surabaya
-    </p>
-    <div style="margin-top: 15px; font-size: 24px;">
-        📈 📋 🗺️
-    </div>
-</div>
-""", unsafe_allow_html=True)
+    """, unsafe_allow_html=True)
+
+with col3:
+    pass
 
 # Upload file
 uploaded_file = st.file_uploader("Upload file CSV/Excel", type=["csv", "xlsx"])
@@ -692,10 +816,15 @@ if uploaded_file is not None:
                 figures_dict["6. Peta Sebaran Negara Tujuan"] = fig6
 
                 # Generate PDF
-                pdf_buffer = create_pdf_report(figures_dict, date_range, total_records, filtered_records)
+                logo_path = "bbkksby_upscaled.png"
+                print(f"DEBUG: Checking logo at: {logo_path}")
+                print(f"DEBUG: File exists: {os.path.exists(logo_path)}")
+                print(f"DEBUG: Current directory: {os.getcwd()}")
+                
+                pdf_buffer = create_pdf_report(figures_dict, date_range, total_records, filtered_records, logo_path=logo_path)
                 
                 # Nama file PDF
-                filename = f"Dashboard_Ekspor_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+                filename = f"Dashboard_OMKABA_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
                 
                 # Simpan ke session state untuk download
                 st.session_state.pdf_buffer = pdf_buffer
