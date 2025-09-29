@@ -785,15 +785,38 @@ if uploaded_file is not None:
                 country_counts.columns = ["Negara", "Jumlah"]
                 country_counts["ISO3"] = country_counts["Negara"].apply(get_iso3)
 
-                top_labels = country_counts.head(10)
+                country_counts["Legend_Label"] = country_counts.apply(
+                    lambda x: f"{x['Negara']} ({x['Jumlah']})", axis=1
+                )
+
+                top_labels = country_counts.head(5)
+
+                color_palettes = [
+                    px.colors.qualitative.Plotly,
+                    px.colors.qualitative.Dark24,
+                    px.colors.qualitative.Light24,
+                    px.colors.qualitative.Set1,
+                    px.colors.qualitative.Set2,
+                    px.colors.qualitative.Set3,
+                    px.colors.qualitative.Pastel1,
+                    px.colors.qualitative.Pastel2
+                ]
+                
+                all_colors = []
+                for palette in color_palettes:
+                    all_colors.extend(palette)
+                
+                unique_colors = list(dict.fromkeys(all_colors))
 
                 fig6 = px.choropleth(
                     country_counts,
                     locations="Negara",
                     locationmode="country names",
-                    color="Jumlah",
+                    color="Legend_Label",
                     hover_name="Negara",
-                    color_continuous_scale=["#e69795", "#bc656d", "#b03031"],
+                    hover_data={"Jumlah": True, "Negara": False},
+                    color_discrete_sequence=unique_colors,
+                    category_orders={"Legend_Label": country_counts["Legend_Label"].tolist()},
                     title="Sebaran Negara Tujuan"
                 )
 
@@ -804,7 +827,7 @@ if uploaded_file is not None:
                         text=row["ISO3"],
                         mode="text",
                         showlegend=False,
-                        textfont=dict(size=9, color="black"),
+                        textfont=dict(size=9, color="black", weight="bold"),
                         hoverinfo="skip"
                     ))
 
@@ -1093,15 +1116,38 @@ if uploaded_file is not None:
     country_counts.columns = ["Negara", "Jumlah"]
     country_counts["ISO3"] = country_counts["Negara"].apply(get_iso3)
 
-    top_labels = country_counts.head(10)
+    country_counts["Legend_Label"] = country_counts.apply(
+    lambda x: f"{x['Negara']} ({x['Jumlah']})", axis=1
+    )
+
+    top_labels = country_counts.head(5)
+
+    color_palettes = [
+    px.colors.qualitative.Plotly,
+    px.colors.qualitative.Dark24,
+    px.colors.qualitative.Light24,
+    px.colors.qualitative.Set1,
+    px.colors.qualitative.Set2,
+    px.colors.qualitative.Set3,
+    px.colors.qualitative.Pastel1,
+    px.colors.qualitative.Pastel2
+    ]
+    
+    all_colors = []
+    for palette in color_palettes:
+        all_colors.extend(palette)
+    
+    unique_colors = list(dict.fromkeys(all_colors))
 
     fig6 = px.choropleth(
         country_counts,
         locations="Negara",
         locationmode="country names",
-        color="Jumlah",
+        color="Legend_Label",
         hover_name="Negara",
-        color_continuous_scale=["#e69795", "#bc656d", "#b03031"],
+        hover_data={"Jumlah": True, "Negara": False},
+        color_discrete_sequence=unique_colors,
+        category_orders={"Legend_Label": country_counts["Legend_Label"].tolist()},
         title="Sebaran Negara Tujuan"
     )
 
@@ -1112,7 +1158,7 @@ if uploaded_file is not None:
             text=row["ISO3"],
             mode="text",
             showlegend=False,
-            textfont=dict(size=9, color="black"),
+            textfont=dict(size=9, color="black", weight="bold"),
             hoverinfo="skip"
         ))
 
