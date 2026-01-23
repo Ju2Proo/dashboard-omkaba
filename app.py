@@ -461,10 +461,16 @@ df_city = pd.read_excel("koordinat_kota.xlsx")
 if uploaded_file is not None:
     # Baca file
     if uploaded_file.name.endswith(".csv"):
-        df = pd.read_csv(uploaded_file)
+        df = pd.read_csv(
+            uploaded_file,
+            sep=None,              # auto-detect delimiter
+            engine="python",       # WAJIB (lebih toleran)
+            encoding="latin1",
+            on_bad_lines="skip"    # baris rusak dilewati
+        )
     else:
         df = pd.read_excel(uploaded_file)
-    
+
     # Preprocessing
     if "Nama Exportir/Importir" in df.columns:
         df["Nama Exportir/Importir"] = df["Nama Exportir/Importir"].apply(comprehensive_clean)
