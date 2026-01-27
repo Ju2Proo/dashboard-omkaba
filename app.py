@@ -131,6 +131,19 @@ def create_logo_page_template(logo_path):
     
     return template
 
+def safe_add_figure(figures_dict, title, build_func):
+    """
+    build_func: function tanpa argumen yang return plotly figure
+    """
+    try:
+        fig = build_func()
+        figures_dict[title] = fig
+        print(f"[OK] {title}")
+    except KeyError as e:
+        print(f"[SKIP] {title} - kolom tidak ada: {e}")
+    except Exception as e:
+        print(f"[SKIP] {title} - error lain: {e}")
+
 def create_pdf_report(figures_dict, date_range, total_records, filtered_records, logo_path=None):
     """
     Membuat laporan PDF dari semua chart yang ada di dashboard
@@ -361,7 +374,8 @@ def create_excel_report(df_filtered, date_range, total_records, filtered_records
             df_export['Diterbitkan Tanggal'] = df_export['Diterbitkan Tanggal'].dt.strftime('%d-%m-%Y')
         
         # Urutkan berdasarkan tanggal
-        df_export = df_export.sort_values('Diterbitkan Tanggal', ascending=False)
+        if 'Diterbitkan Tanggal' in df_export.columns:
+            df_export = df_export.sort_values('Diterbitkan Tanggal', ascending=False)
         
         # Tulis ke sheet
         df_export.to_excel(writer, sheet_name='Data_Ekspor', index=False)
@@ -418,8 +432,6 @@ def create_excel_report(df_filtered, date_range, total_records, filtered_records
     buffer.seek(0)
     return buffer
 
-
-
 # ========================
 # DASHBOARD STREAMLIT
 # ========================
@@ -455,6 +467,33 @@ with col3:
 # Upload file
 uploaded_file = st.file_uploader("Upload file CSV/Excel", type=["csv", "xlsx"])
 
+st.markdown("""
+<div style="
+    padding: 12px 18px;
+    border-left: 6px solid #3EADB3;
+    border-right: 6px solid #3EADB3;
+    background-color: #f8f9fa;
+    border-radius: 6px;
+    font-size: 15px;
+    color: #9E6B2B;
+">
+<b>📌 5 Kolom yang Perlu Ada:</b><br>
+<ul style="margin: 6px 0 0 20px;">
+    <li>Diterbitkan Tanggal</li>
+    <li>Nama Exportir/Importir</li>
+    <li>Alamat Perusahaan</li>
+    <li>Jenis Komoditi</li>
+    <li>Negara Tujuan</li>
+</ul>
+<span style="color: #6c757d; font-size: 13px;">
+Jika salah satu kolom tidak tersedia, dashboard tetap tampil namun visualisasi terkait akan dikosongkan.
+</span>
+<span style="color: #6c757d; font-size: 13px;">
+Tanda baca, spasi, dan huruf kapital untuk 5 kolom tersebut juga perlu sama dengan 5 list diatas.
+</span>
+</div>
+""", unsafe_allow_html=True)
+
 # baca file koordinat kota bawaan (selalu ada di project)
 df_city = pd.read_excel("koordinat_kota.xlsx")
 
@@ -471,6 +510,24 @@ if uploaded_file is not None:
     else:
         df = pd.read_excel(uploaded_file)
 
+    REQUIRED_COLUMNS = [
+        "Diterbitkan Tanggal",
+        "Nama Exportir/Importir",
+        "Alamat Perusahaan",
+        "Jenis Komoditi",
+        "Negara Tujuan"
+    ]
+    
+    available_columns = set(df.columns)
+    missing_columns = [col for col in REQUIRED_COLUMNS if col not in available_columns]
+    
+    if missing_columns:
+        st.warning(
+            "⚠️ Beberapa kolom tidak ditemukan:\n\n" +
+            ", ".join(missing_columns) +
+            "\n\nDashboard tetap ditampilkan, namun visualisasi terkait akan dikosongkan."
+        )
+
     # Preprocessing
     if "Nama Exportir/Importir" in df.columns:
         df["Nama Exportir/Importir"] = df["Nama Exportir/Importir"].apply(comprehensive_clean)
@@ -481,84 +538,102 @@ if uploaded_file is not None:
         )
     
     # Konversi kolom tanggal
-    df["Diterbitkan Tanggal"] = pd.to_datetime(df["Diterbitkan Tanggal"], dayfirst=True, errors="coerce")
-    
-    # Remove rows with NaT (Not a Time) values in date column
-    df = df.dropna(subset=["Diterbitkan Tanggal"])
+    if "Diterbitkan Tanggal" in df.columns:
+        df["Diterbitkan Tanggal"] = pd.to_datetime(
+            df["Diterbitkan Tanggal"], dayfirst=True, errors="coerce"
+        )
+        df = df.dropna(subset=["Diterbitkan Tanggal"])
+    else:
+        st.error("❌ Kolom 'Diterbitkan Tanggal' tidak tersedia. Filter tanggal dan grafik berbasis waktu dinonaktifkan.")
     
     st.success("✅ File berhasil diupload!")
+
+    # ========================
+    # DEFAULT NILAI FILTER TANGGAL
+    # ========================
+    start_date = None
+    end_date = None
+    min_date = None
+    max_date = None
     
     # ========================
     # FILTER TANGGAL
     # ========================
-    st.sidebar.header("🗓️ Filter Tanggal")
-    
-    # Deteksi batas minimum dan maksimum tanggal
-    if df["Diterbitkan Tanggal"].empty:
-        st.error("❌ Tidak ada data valid pada kolom tanggal setelah preprocessing!")
-        st.stop()
-    
-    min_date = df["Diterbitkan Tanggal"].min().date()
-    max_date = df["Diterbitkan Tanggal"].max().date()
+    date_column_available = "Diterbitkan Tanggal" in df.columns
 
-    if pd.isna(min_date) or pd.isna(max_date):
-        st.sidebar.warning("⚠️ Rentang tanggal tidak dapat ditentukan (semua NaT)")
-    else:
-        st.sidebar.info(f"📅 Rentang data tersedia:\n{min_date.strftime('%d-%m-%y')} - {max_date.strftime('%d-%m-%y')}")
-    
-    # Checkbox untuk pilih semua rentang tanggal
-    select_all_dates = st.sidebar.checkbox("Pilih Semua Rentang Tanggal", value=True)
-    
-    if select_all_dates:
-        # Gunakan seluruh rentang tanggal
-        start_date = min_date
-        end_date = max_date
-        st.sidebar.success("✅ Menampilkan semua data")
-    else:
-        # Date picker untuk rentang tanggal
-        col_start, col_end = st.sidebar.columns(2)
+    if date_column_available:
+        st.sidebar.header("🗓️ Filter Tanggal")
         
-        with col_start:
-            start_date = st.date_input(
-                "Tanggal Mulai",
-                value=min_date,
-                min_value=min_date,
-                max_value=max_date
-            )
-        
-        with col_end:
-            end_date = st.date_input(
-                "Tanggal Akhir",
-                value=max_date,
-                min_value=min_date,
-                max_value=max_date
-            )
-        
-        # Validasi rentang tanggal
-        if start_date > end_date:
-            st.sidebar.error("⚠️ Tanggal mulai tidak boleh lebih besar dari tanggal akhir!")
+        # Deteksi batas minimum dan maksimum tanggal
+        if df["Diterbitkan Tanggal"].empty:
+            st.error("❌ Tidak ada data valid pada kolom tanggal setelah preprocessing!")
             st.stop()
+        
+        min_date = df["Diterbitkan Tanggal"].min().date()
+        max_date = df["Diterbitkan Tanggal"].max().date()
     
-    # Filter data berdasarkan tanggal
-    df_filtered = df[
-        (df["Diterbitkan Tanggal"].dt.date >= start_date) & 
-        (df["Diterbitkan Tanggal"].dt.date <= end_date)
-    ]
-    
-    # Tampilkan informasi filter
-    total_records = len(df)
-    filtered_records = len(df_filtered)
-    
-    st.sidebar.metric(
-        label="📊 Data Ditampilkan",
-        value=f"{filtered_records:,}",
-        delta=f"{filtered_records - total_records:,} dari total {total_records:,}"
-    )
-    
-    # Jika tidak ada data setelah filter
-    if df_filtered.empty:
-        st.warning("⚠️ Tidak ada data dalam rentang tanggal yang dipilih. Silakan pilih rentang tanggal lain.")
-        st.stop()
+        if pd.isna(min_date) or pd.isna(max_date):
+            st.sidebar.warning("⚠️ Rentang tanggal tidak dapat ditentukan (semua NaT)")
+        else:
+            st.sidebar.info(f"📅 Rentang data tersedia:\n{min_date.strftime('%d-%m-%y')} - {max_date.strftime('%d-%m-%y')}")
+        
+        # Checkbox untuk pilih semua rentang tanggal
+        select_all_dates = st.sidebar.checkbox("Pilih Semua Rentang Tanggal", value=True)
+        
+        if select_all_dates:
+            # Gunakan seluruh rentang tanggal
+            start_date = min_date
+            end_date = max_date
+            st.sidebar.success("✅ Menampilkan semua data")
+        else:
+            # Date picker untuk rentang tanggal
+            col_start, col_end = st.sidebar.columns(2)
+            
+            with col_start:
+                start_date = st.date_input(
+                    "Tanggal Mulai",
+                    value=min_date,
+                    min_value=min_date,
+                    max_value=max_date
+                )
+            
+            with col_end:
+                end_date = st.date_input(
+                    "Tanggal Akhir",
+                    value=max_date,
+                    min_value=min_date,
+                    max_value=max_date
+                )
+            
+            # Validasi rentang tanggal
+            if start_date > end_date:
+                st.sidebar.error("⚠️ Tanggal mulai tidak boleh lebih besar dari tanggal akhir!")
+                st.stop()
+        
+        # Filter data berdasarkan tanggal
+        df_filtered = df[
+            (df["Diterbitkan Tanggal"].dt.date >= start_date) & 
+            (df["Diterbitkan Tanggal"].dt.date <= end_date)
+        ]
+        
+        # Tampilkan informasi filter
+        total_records = len(df)
+        filtered_records = len(df_filtered)
+        
+        st.sidebar.metric(
+            label="📊 Data Ditampilkan",
+            value=f"{filtered_records:,}",
+            delta=f"{filtered_records - total_records:,} dari total {total_records:,}"
+        )
+        
+        # Jika tidak ada data setelah filter
+        if df_filtered.empty:
+            st.warning("⚠️ Tidak ada data dalam rentang tanggal yang dipilih. Silakan pilih rentang tanggal lain.")
+            st.stop()
+    else:
+        df_filtered = df.copy()
+        total_records = len(df)
+        filtered_records = len(df)
 
     # ========================
     # TOMBOL EXPORT PDF
@@ -572,277 +647,308 @@ if uploaded_file is not None:
                 figures_dict = {}
                 
                 # Date range string
-                if start_date == min_date and end_date == max_date:
-                    date_range = f"{min_date.strftime('%d-%m-%Y')} - {max_date.strftime('%d-%m-%Y')} (Semua Data)"
+                if date_column_available and start_date and end_date:
+                    if start_date == min_date and end_date == max_date:
+                        date_range = f"{min_date.strftime('%d-%m-%Y')} - {max_date.strftime('%d-%m-%Y')} (Semua Data)"
+                    else:
+                        date_range = f"{start_date.strftime('%d-%m-%Y')} - {end_date.strftime('%d-%m-%Y')}"
                 else:
-                    date_range = f"{start_date.strftime('%d-%m-%Y')} - {end_date.strftime('%d-%m-%Y')}"
+                    date_range = "Semua Data (tanpa filter tanggal)"
 
                 # ========================
                 # 1. PIE CHART KOMODITAS
                 # ========================
-                comodity = df_filtered['Jenis Komoditi'].value_counts().reset_index()
-                comodity.columns = ["Jenis Komoditi", "Jumlah"]
-
-                total = comodity["Jumlah"].sum()
-                comodity["Persentase"] = comodity["Jumlah"] / total * 100
-                comodity["Label"] = comodity.apply(
-                    lambda x: f"{x['Jenis Komoditi']} ({x['Jumlah']} unit, {x['Persentase']:.2f}%)", axis=1
-                )
-
-                n_categories = len(comodity)
-                base_size = 390
-                additional_size = n_categories * 15
-
-                fig1 = go.Figure(
-                    data=[
-                        go.Pie(
-                            labels=comodity["Jenis Komoditi"],
-                            values=comodity["Jumlah"],
-                            hole=0.35,
-                            textinfo="label+percent+value",
-                            texttemplate="<b>%{label}</b><br>%{value} unit<br>(%{percent})",
-                            hovertemplate="<b>%{label}</b><br>Jumlah: %{value}<br>Persen: %{percent}<extra></extra>",
-                            marker=dict(
-                                colors=px.colors.qualitative.Plotly, 
-                                line=dict(color="white", width=2)
-                            ),
-                            textposition="outside",
-                            textfont=dict(size=12, family="Arial", color="black"),
-                            insidetextorientation='radial',
-                            outsidetextfont=dict(size=11),
-                            pull=0.03,
-                        )
-                    ]
-                )
-            
-                fig1.update_layout(
-                    showlegend=False,
-                    annotations=[],
-                    uniformtext_minsize=10,
-                    uniformtext_mode='hide',
-                    
-                    margin=dict(l=5, r=5, t=90, b=35),  # Margin sangat ketat
-                    width=base_size + additional_size,  # Ukuran dinamis
-                    height=base_size + additional_size,
-                    autosize=False,
-                    
-                    # Hilangkan padding dan spacing yang tidak perlu
-                    paper_bgcolor='white',
-                    plot_bgcolor='white',
-                    
-                    # Hilangkan axis dan grid yang tidak diperlukan
-                    xaxis=dict(visible=False, showgrid=False, zeroline=False),
-                    yaxis=dict(visible=False, showgrid=False, zeroline=False),
-                )
-            
-                fig1.update_traces(
-                    marker_line_color='white',
-                    marker_line_width=2,
-                    textfont_size=11,
-                    textposition='outside',
-                    textfont_color='black',
-                    insidetextfont=dict(size=11, color='white', family='Arial'),
-                    outsidetextfont=dict(size=10, family='Arial'),
-                    pull=[0.15 if i == 0 else 0.05 for i in range(len(comodity))],
-                    rotation=30,
-                    hole=0.4
-                )
+                def build_fig1_original():
+                    comodity = df_filtered['Jenis Komoditi'].value_counts().reset_index()
+                    comodity.columns = ["Jenis Komoditi", "Jumlah"]
                 
-                # Atur layout agar lebih compact
-                fig1.update_layout(
-                    autosize=True,  # Auto-size untuk menyesuaikan konten
-                )
+                    total = comodity["Jumlah"].sum()
+                    comodity["Persentase"] = comodity["Jumlah"] / total * 100
+                    comodity["Label"] = comodity.apply(
+                        lambda x: f"{x['Jenis Komoditi']} ({x['Jumlah']} unit, {x['Persentase']:.2f}%)",
+                        axis=1
+                    )
                 
-                figures_dict["1. Distribusi Komoditas"] = fig1
+                    n_categories = len(comodity)
+                    base_size = 390
+                    additional_size = n_categories * 15
+                
+                    fig = go.Figure(
+                        data=[
+                            go.Pie(
+                                labels=comodity["Jenis Komoditi"],
+                                values=comodity["Jumlah"],
+                                hole=0.35,
+                                textinfo="label+percent+value",
+                                texttemplate="<b>%{label}</b><br>%{value} unit<br>(%{percent})",
+                                hovertemplate="<b>%{label}</b><br>Jumlah: %{value}<br>Persen: %{percent}<extra></extra>",
+                                marker=dict(
+                                    colors=px.colors.qualitative.Plotly,
+                                    line=dict(color="white", width=2)
+                                ),
+                                textposition="outside",
+                                textfont=dict(size=12, family="Arial", color="black"),
+                                insidetextorientation="radial",
+                                outsidetextfont=dict(size=11),
+                                pull=0.03,
+                            )
+                        ]
+                    )
+                
+                    fig.update_layout(
+                        showlegend=False,
+                        uniformtext_minsize=10,
+                        uniformtext_mode="hide",
+                        margin=dict(l=5, r=5, t=90, b=35),
+                        width=base_size + additional_size,
+                        height=base_size + additional_size,
+                        paper_bgcolor="white",
+                        plot_bgcolor="white",
+                        xaxis=dict(visible=False),
+                        yaxis=dict(visible=False),
+                        autosize=True
+                    )
+                
+                    fig.update_traces(
+                        pull=[0.15 if i == 0 else 0.05 for i in range(len(comodity))],
+                        rotation=30,
+                        hole=0.4
+                    )
+                
+                    return fig
+
+                safe_add_figure(
+                    figures_dict,
+                    "Distribusi Komoditas",
+                    build_fig1_original
+                )
 
                 # ========================
                 # 2. BAR CHART NEGARA
                 # ========================
-                top_10_country = df_filtered['Negara Tujuan'].value_counts().head(10).reset_index()
-                top_10_country.columns = ["Negara", "Jumlah"]
-
-                fig2 = px.bar(
-                    top_10_country,
-                    x="Negara",
-                    y="Jumlah",
-                    text="Jumlah",
-                    color="Jumlah",
-                    color_continuous_scale=["#e69795", "#bc656d", "#b03031"],
-                    title="Top 10 Negara Tujuan"
+                def build_fig2_original():
+                    top_10_country = df_filtered['Negara Tujuan'].value_counts().head(10).reset_index()
+                    top_10_country.columns = ["Negara", "Jumlah"]
+    
+                    fig = px.bar(
+                        top_10_country,
+                        x="Negara",
+                        y="Jumlah",
+                        text="Jumlah",
+                        color="Jumlah",
+                        color_continuous_scale=["#e69795", "#bc656d", "#b03031"],
+                        title="Top 10 Negara Tujuan"
+                    )
+    
+                    fig.update_traces(texttemplate='%{text}', textposition='outside')
+                    fig.update_layout(
+                        xaxis_title="Negara", 
+                        yaxis_title="Jumlah",
+                        width=800,
+                        height=600
+                    )
+                    
+                    return fig
+                    
+                safe_add_figure(
+                    figures_dict,
+                    "Top 10 Negara Tujuan",
+                    build_fig2_original
                 )
-
-                fig2.update_traces(texttemplate='%{text}', textposition='outside')
-                fig2.update_layout(
-                    xaxis_title="Negara", 
-                    yaxis_title="Jumlah",
-                    width=800,
-                    height=600
-                )
-                figures_dict["2. Top 10 Negara Tujuan"] = fig2
 
                 # ========================
                 # 3. BAR CHART KOTA PERUSAHAAN EKSPOR
                 # ========================
-                top_10_city = df_filtered['Kota'].value_counts().head(10).reset_index()
-                top_10_city.columns = ["Kota", "Jumlah"]
-                
-                fig = px.bar(
-                    top_10_city,
-                    x="Kota",
-                    y="Jumlah",
-                    text="Jumlah", 
-                    color="Kota", 
-                    color_discrete_sequence=px.colors.qualitative.Plotly,
-                    title="Top 10 Kota Perusahaan Eksportir"
+                def build_fig3_original():
+                    top_10_city = df_filtered['Kota'].value_counts().head(10).reset_index()
+                    top_10_city.columns = ["Kota", "Jumlah"]
+                    
+                    fig = px.bar(
+                        top_10_city,
+                        x="Kota",
+                        y="Jumlah",
+                        text="Jumlah", 
+                        color="Kota", 
+                        color_discrete_sequence=px.colors.qualitative.Plotly,
+                        title="Top 10 Kota Perusahaan Eksportir"
+                    )
+                    
+                    fig.update_traces(texttemplate='%{text}', textposition='outside', showlegend=False)
+                    fig.update_layout(
+                        xaxis_title="Kota",
+                        yaxis_title="Jumlah",
+                        uniformtext_minsize=8,
+                        uniformtext_mode='hide',
+                        showlegend=False,
+                        width=800,
+                        height=600
+                    )
+                    
+                    return fig
+
+                safe_add_figure(
+                    figures_dict,
+                    "Top 10 Kota Perusahaan Eksportir",
+                    build_fig3_original
                 )
-                
-                fig.update_traces(texttemplate='%{text}', textposition='outside', showlegend=False)
-                fig.update_layout(
-                    xaxis_title="Kota",
-                    yaxis_title="Jumlah",
-                    uniformtext_minsize=8,
-                    uniformtext_mode='hide',
-                    showlegend=False,
-                    width=800,
-                    height=600
-                )
-                
-                figures_dict["3. Top 10 Kota Perusahaan Eksportir"] = fig
 
                 # ========================
                 # 4. BAR CHART PERUSAHAAN EXPORTIR
                 # ========================
-                top_10_company = df_filtered['Nama Exportir/Importir'].value_counts().head(10).reset_index()
-                top_10_company.columns = ["Perusahaan", "Jumlah"]
-                
-                fig4 = px.bar(
-                    top_10_company,
-                    x="Perusahaan",
-                    y="Jumlah",
-                    text="Jumlah", 
-                    color="Jumlah",
-                    color_continuous_scale="plasma",
-                    title="Top 10 Perusahaan Ekspor Paling Banyak"
+                def build_fig4_original():
+                    top_10_company = df_filtered['Nama Exportir/Importir'].value_counts().head(10).reset_index()
+                    top_10_company.columns = ["Perusahaan", "Jumlah"]
+                    
+                    fig = px.bar(
+                        top_10_company,
+                        x="Perusahaan",
+                        y="Jumlah",
+                        text="Jumlah", 
+                        color="Jumlah",
+                        color_continuous_scale="plasma",
+                        title="Top 10 Perusahaan Ekspor Paling Banyak"
+                    )
+                    
+                    fig.update_traces(texttemplate='%{text}', textposition='outside')
+                    fig.update_layout(
+                        xaxis_title="Perusahaan",
+                        yaxis_title="Jumlah",
+                        width=800,
+                        height=600
+                    )
+
+                    return fig
+
+                safe_add_figure(
+                    figures_dict,
+                    "Top 10 Perusahaan Ekspor",
+                    build_fig4_original
                 )
-                
-                fig4.update_traces(texttemplate='%{text}', textposition='outside')
-                fig4.update_layout(
-                    xaxis_title="Perusahaan",
-                    yaxis_title="Jumlah",
-                    width=800,
-                    height=600
-                )
-                figures_dict["4. Top 10 Perusahaan Ekspor"] = fig4
 
                 # ========================
                 # 5. LINE CHART TIMELINE
                 # ========================
-                timeline = df_filtered.groupby("Diterbitkan Tanggal").size().reset_index(name="Jumlah")
-                timeline['Tanggal_Display'] = timeline["Diterbitkan Tanggal"].dt.strftime('%d-%m-%Y')
-                timeline['Bulan_Tahun'] = timeline["Diterbitkan Tanggal"].dt.strftime('%b %Y')
+                def build_fig5_original():
+                    timeline = df_filtered.groupby("Diterbitkan Tanggal").size().reset_index(name="Jumlah")
+                    timeline['Tanggal_Display'] = timeline["Diterbitkan Tanggal"].dt.strftime('%d-%m-%Y')
+                    timeline['Bulan_Tahun'] = timeline["Diterbitkan Tanggal"].dt.strftime('%b %Y')
+    
+                    fig = px.line(
+                        timeline,
+                        x="Diterbitkan Tanggal",
+                        y="Jumlah",
+                        markers=True,
+                        title="Tren Jumlah Ekspor",
+                        hover_data={'Diterbitkan Tanggal': False}
+                    )
+    
+                    fig.update_traces(
+                        line=dict(color="royalblue", width=2),
+                        marker=dict(size=8, color="orange"),
+                        hovertemplate="<b>Tanggal:</b> %{customdata[0]}<br><b>Jumlah:</b> %{y}<extra></extra>",
+                        customdata=timeline[['Tanggal_Display']].values
+                    )
+    
+                    fig.update_layout(
+                        xaxis=dict(
+                            title="Tanggal", 
+                            showgrid=True, 
+                            gridcolor="lightgrey",
+                            tickformat="%b %Y",
+                            dtick="M1",  # Tick setiap bulan
+                            tickangle=45  # Rotate label agar tidak overlap
+                        ),
+                        yaxis=dict(title="Jumlah", showgrid=True, gridcolor="lightgrey"),
+                        plot_bgcolor="white",
+                        hovermode="x unified",
+                        width=800,
+                        height=600,
+                        margin=dict(b=100)  # Tambah margin bawah untuk rotated labels
+                    )
+    
+                    monthly_ticks = timeline.groupby(timeline["Diterbitkan Tanggal"].dt.to_period("M")).first()
+    
+                    fig.update_xaxes(
+                        tickvals=monthly_ticks["Diterbitkan Tanggal"],
+                        ticktext=monthly_ticks["Bulan_Tahun"],
+                        tickangle=45
+                    )
+                    
+                    return fig
 
-                fig5 = px.line(
-                    timeline,
-                    x="Diterbitkan Tanggal",
-                    y="Jumlah",
-                    markers=True,
-                    title="Tren Jumlah Ekspor",
-                    hover_data={'Diterbitkan Tanggal': False}
+                safe_add_figure(
+                    figures_dict,
+                    "Tren Jumlah Ekspor",
+                    build_fig5_original
                 )
-
-                fig5.update_traces(
-                    line=dict(color="royalblue", width=2),
-                    marker=dict(size=8, color="orange"),
-                    hovertemplate="<b>Tanggal:</b> %{customdata[0]}<br><b>Jumlah:</b> %{y}<extra></extra>",
-                    customdata=timeline[['Tanggal_Display']].values
-                )
-
-                fig5.update_layout(
-                    xaxis=dict(
-                        title="Tanggal", 
-                        showgrid=True, 
-                        gridcolor="lightgrey",
-                        tickformat="%b %Y",
-                        dtick="M1",  # Tick setiap bulan
-                        tickangle=45  # Rotate label agar tidak overlap
-                    ),
-                    yaxis=dict(title="Jumlah", showgrid=True, gridcolor="lightgrey"),
-                    plot_bgcolor="white",
-                    hovermode="x unified",
-                    width=800,
-                    height=600,
-                    margin=dict(b=100)  # Tambah margin bawah untuk rotated labels
-                )
-
-                monthly_ticks = timeline.groupby(timeline["Diterbitkan Tanggal"].dt.to_period("M")).first()
-
-                fig5.update_xaxes(
-                    tickvals=monthly_ticks["Diterbitkan Tanggal"],
-                    ticktext=monthly_ticks["Bulan_Tahun"],
-                    tickangle=45
-                )
-                
-                figures_dict["5. Tren Jumlah Ekspor"] = fig5
 
                 # ========================
                 # 6. MAP NEGARA TUJUAN
                 # ========================
-                country_counts = df_filtered['Negara Tujuan'].value_counts().reset_index()
-                country_counts.columns = ["Negara", "Jumlah"]
-                country_counts["ISO3"] = country_counts["Negara"].apply(get_iso3)
-
-                country_counts["Legend_Label"] = country_counts.apply(
-                    lambda x: f"{x['Negara']} ({x['Jumlah']})", axis=1
-                )
-
-                top_labels = country_counts.head(5)
-
-                color_palettes = [
-                    px.colors.qualitative.Plotly,
-                    px.colors.qualitative.Dark24,
-                    px.colors.qualitative.Light24,
-                    px.colors.qualitative.Set1,
-                    px.colors.qualitative.Set2,
-                    px.colors.qualitative.Set3,
-                    px.colors.qualitative.Pastel1,
-                    px.colors.qualitative.Pastel2
-                ]
-                
-                all_colors = []
-                for palette in color_palettes:
-                    all_colors.extend(palette)
-                
-                unique_colors = list(dict.fromkeys(all_colors))
-
-                fig6 = px.choropleth(
-                    country_counts,
-                    locations="Negara",
-                    locationmode="country names",
-                    color="Legend_Label",
-                    hover_name="Negara",
-                    hover_data={"Jumlah": True, "Negara": False},
-                    color_discrete_sequence=unique_colors,
-                    category_orders={"Legend_Label": country_counts["Legend_Label"].tolist()},
-                    title="Sebaran Negara Tujuan"
-                )
-
-                for _, row in top_labels.iterrows():
-                    fig6.add_trace(go.Scattergeo(
+                def build_fig6_original():
+                    country_counts = df_filtered['Negara Tujuan'].value_counts().reset_index()
+                    country_counts.columns = ["Negara", "Jumlah"]
+                    country_counts["ISO3"] = country_counts["Negara"].apply(get_iso3)
+    
+                    country_counts["Legend_Label"] = country_counts.apply(
+                        lambda x: f"{x['Negara']} ({x['Jumlah']})", axis=1
+                    )
+    
+                    top_labels = country_counts.head(5)
+    
+                    color_palettes = [
+                        px.colors.qualitative.Plotly,
+                        px.colors.qualitative.Dark24,
+                        px.colors.qualitative.Light24,
+                        px.colors.qualitative.Set1,
+                        px.colors.qualitative.Set2,
+                        px.colors.qualitative.Set3,
+                        px.colors.qualitative.Pastel1,
+                        px.colors.qualitative.Pastel2
+                    ]
+                    
+                    all_colors = []
+                    for palette in color_palettes:
+                        all_colors.extend(palette)
+                    
+                    unique_colors = list(dict.fromkeys(all_colors))
+    
+                    fig = px.choropleth(
+                        country_counts,
+                        locations="Negara",
                         locationmode="country names",
-                        locations=[row["Negara"]],
-                        text=row["ISO3"],
-                        mode="text",
-                        showlegend=False,
-                        textfont=dict(size=9, color="black", weight="bold"),
-                        hoverinfo="skip"
-                    ))
+                        color="Legend_Label",
+                        hover_name="Negara",
+                        hover_data={"Jumlah": True, "Negara": False},
+                        color_discrete_sequence=unique_colors,
+                        category_orders={"Legend_Label": country_counts["Legend_Label"].tolist()},
+                        title="Sebaran Negara Tujuan"
+                    )
+    
+                    for _, row in top_labels.iterrows():
+                        fig.add_trace(go.Scattergeo(
+                            locationmode="country names",
+                            locations=[row["Negara"]],
+                            text=row["ISO3"],
+                            mode="text",
+                            showlegend=False,
+                            textfont=dict(size=9, color="black", weight="bold"),
+                            hoverinfo="skip"
+                        ))
+    
+                    fig.update_layout(
+                        geo=dict(showframe=False, showcoastlines=True, projection_type='natural earth'),
+                        width=800,
+                        height=600
+                    )
 
-                fig6.update_layout(
-                    geo=dict(showframe=False, showcoastlines=True, projection_type='natural earth'),
-                    width=800,
-                    height=600
-                )
-                figures_dict["6. Peta Sebaran Negara Tujuan"] = fig6
+                    return fig
+
+                safe_add_figure(
+                    figures_dict,
+                    "Peta Sebaran Negara Tujuan",
+                    build_fig6_original
+                )                
 
                 # Generate PDF
                 logo_path = "bbkksby_upscaled.png"
@@ -869,10 +975,13 @@ if uploaded_file is not None:
         with st.spinner("Sedang membuat laporan Excel..."):
             try:
                 # Date range string
-                if start_date == min_date and end_date == max_date:
-                    date_range = f"{min_date.strftime('%d-%m-%Y')} - {max_date.strftime('%d-%m-%Y')} (Semua Data)"
+                if date_column_available and start_date and end_date:
+                    if start_date == min_date and end_date == max_date:
+                        date_range = f"{min_date.strftime('%d-%m-%Y')} - {max_date.strftime('%d-%m-%Y')} (Semua Data)"
+                    else:
+                        date_range = f"{start_date.strftime('%d-%m-%Y')} - {end_date.strftime('%d-%m-%Y')}"
                 else:
-                    date_range = f"{start_date.strftime('%d-%m-%Y')} - {end_date.strftime('%d-%m-%Y')}"
+                    date_range = "Semua Data (tanpa filter tanggal)"
                 
                 # Generate Excel
                 excel_buffer = create_excel_report(df_filtered, date_range, total_records, filtered_records)
@@ -916,274 +1025,325 @@ if uploaded_file is not None:
     # ========================
     # 1. PIE CHART KOMODITAS
     # ========================
-    comodity = df_filtered['Jenis Komoditi'].value_counts().reset_index()
-    comodity.columns = ["Jenis Komoditi", "Jumlah"]
-
-    total = comodity["Jumlah"].sum()
-    comodity["Persentase"] = comodity["Jumlah"] / total * 100
-    comodity["Label"] = comodity.apply(
-        lambda x: f"{x['Jenis Komoditi']} ({x['Jumlah']} unit, {x['Persentase']:.2f}%)", axis=1
-    )
-
-    n_categories = len(comodity)
-    base_size = 390
-    additional_size = n_categories * 15  # Tambahan size berdasarkan jumlah kategori
-
-    fig1 = go.Figure(
-        data=[
-            go.Pie(
-                labels=comodity["Jenis Komoditi"],
-                values=comodity["Jumlah"],
-                hole=0.35,
-                textinfo="label+percent+value",
-                texttemplate="<b>%{label}</b><br>%{value} unit<br>(%{percent})",
-                hovertemplate="<b>%{label}</b><br>Jumlah: %{value}<br>Persen: %{percent}<extra></extra>",
-                marker=dict(
-                    colors=px.colors.qualitative.Plotly, 
-                    line=dict(color="white", width=2)
-                ),
-                textposition="outside",
-                textfont=dict(size=12, family="Arial", color="black"),
-                insidetextorientation='radial',
-                outsidetextfont=dict(size=11),
-                pull=0.03,
-            )
-        ]
-    )
-
-    fig1.update_layout(
-        showlegend=False,
-        annotations=[],
-        uniformtext_minsize=10,
-        uniformtext_mode='hide',
-        
-        margin=dict(l=5, r=5, t=90, b=35),  # Margin sangat ketat
-        width=base_size + additional_size,  # Ukuran dinamis
-        height=base_size + additional_size,
-        autosize=False,
-        
-        # Hilangkan padding dan spacing yang tidak perlu
-        paper_bgcolor='white',
-        plot_bgcolor='white',
-        
-        # Hilangkan axis dan grid yang tidak diperlukan
-        xaxis=dict(visible=False, showgrid=False, zeroline=False),
-        yaxis=dict(visible=False, showgrid=False, zeroline=False),
-    )
-
-    fig1.update_traces(
-        marker_line_color='white',
-        marker_line_width=2,
-        textfont_size=11,
-        textposition='outside',
-        textfont_color='black',
-        insidetextfont=dict(size=11, color='white', family='Arial'),
-        outsidetextfont=dict(size=10, family='Arial'),
-        pull=[0.15 if i == 0 else 0.05 for i in range(len(comodity))],
-        rotation=30,
-        hole=0.4
-    )
+    if "Jenis Komoditi" in df_filtered.columns:
+        comodity = df_filtered['Jenis Komoditi'].value_counts().reset_index()
+        comodity.columns = ["Jenis Komoditi", "Jumlah"]
     
-    # Atur layout agar lebih compact
-    fig1.update_layout(
-        autosize=True,  # Auto-size untuk menyesuaikan konten
-        title={
-        'text': "Persentase Jenis Komoditi",
-        'y': 0.97,
-        'x': 0.0,
-        'xanchor': 'left',
-        'yanchor': 'top'
-    },
-    title_font=dict(size=20, color="black", family="Arial Black"),
-    title_font_color="black"
-    )
+        total = comodity["Jumlah"].sum()
+        comodity["Persentase"] = comodity["Jumlah"] / total * 100
+        comodity["Label"] = comodity.apply(
+            lambda x: f"{x['Jenis Komoditi']} ({x['Jumlah']} unit, {x['Persentase']:.2f}%)", axis=1
+        )
+    
+        n_categories = len(comodity)
+        base_size = 390
+        additional_size = n_categories * 15  # Tambahan size berdasarkan jumlah kategori
+    
+        fig1 = go.Figure(
+            data=[
+                go.Pie(
+                    labels=comodity["Jenis Komoditi"],
+                    values=comodity["Jumlah"],
+                    hole=0.35,
+                    textinfo="label+percent+value",
+                    texttemplate="<b>%{label}</b><br>%{value} unit<br>(%{percent})",
+                    hovertemplate="<b>%{label}</b><br>Jumlah: %{value}<br>Persen: %{percent}<extra></extra>",
+                    marker=dict(
+                        colors=px.colors.qualitative.Plotly, 
+                        line=dict(color="white", width=2)
+                    ),
+                    textposition="outside",
+                    textfont=dict(size=12, family="Arial", color="black"),
+                    insidetextorientation='radial',
+                    outsidetextfont=dict(size=11),
+                    pull=0.03,
+                )
+            ]
+        )
+    
+        fig1.update_layout(
+            showlegend=False,
+            annotations=[],
+            uniformtext_minsize=10,
+            uniformtext_mode='hide',
+            
+            margin=dict(l=5, r=5, t=90, b=35),  # Margin sangat ketat
+            width=base_size + additional_size,  # Ukuran dinamis
+            height=base_size + additional_size,
+            autosize=False,
+            
+            # Hilangkan padding dan spacing yang tidak perlu
+            paper_bgcolor='white',
+            plot_bgcolor='white',
+            
+            # Hilangkan axis dan grid yang tidak diperlukan
+            xaxis=dict(visible=False, showgrid=False, zeroline=False),
+            yaxis=dict(visible=False, showgrid=False, zeroline=False),
+        )
+    
+        fig1.update_traces(
+            marker_line_color='white',
+            marker_line_width=2,
+            textfont_size=11,
+            textposition='outside',
+            textfont_color='black',
+            insidetextfont=dict(size=11, color='white', family='Arial'),
+            outsidetextfont=dict(size=10, family='Arial'),
+            pull=[0.15 if i == 0 else 0.05 for i in range(len(comodity))],
+            rotation=30,
+            hole=0.4
+        )
+        
+        # Atur layout agar lebih compact
+        fig1.update_layout(
+            autosize=True,  # Auto-size untuk menyesuaikan konten
+            title={
+            'text': "Persentase Jenis Komoditi",
+            'y': 0.97,
+            'x': 0.0,
+            'xanchor': 'left',
+            'yanchor': 'top'
+        },
+        title_font=dict(size=20, color="black", family="Arial Black"),
+        title_font_color="black"
+        )
+    else:
+        fig1 = go.Figure()
+        fig1.add_annotation(
+            text="❌ Kolom 'Jenis Komoditi' tidak tersedia pada file",
+            x=0.5, y=0.5,
+            showarrow=False,
+            font=dict(size=14)
+        )
 
     # ========================
     # 2. BAR CHART NEGARA
     # ========================
-    top_10_country = df_filtered['Negara Tujuan'].value_counts().head(10).reset_index()
-    top_10_country.columns = ["Negara", "Jumlah"]
-
-    fig2 = px.bar(
-        top_10_country,
-        x="Negara",
-        y="Jumlah",
-        text="Jumlah",
-        color="Jumlah",
-        color_continuous_scale=["#e69795", "#bc656d", "#b03031"],
-        title="Top 10 Negara Tujuan"
-    )
-
-    fig2.update_traces(texttemplate='%{text}', textposition='outside')
-
-    max_value = max(top_10_country["Jumlah"])
-    y_range_max = max_value * 1.2
+    if "Negara Tujuan" in df_filtered.columns:
+        top_10_country = df_filtered['Negara Tujuan'].value_counts().head(10).reset_index()
+        top_10_country.columns = ["Negara", "Jumlah"]
     
-    fig2.update_layout(xaxis_title="Negara", yaxis_title="Jumlah", yaxis=dict(range=[0, y_range_max]))
+        fig2 = px.bar(
+            top_10_country,
+            x="Negara",
+            y="Jumlah",
+            text="Jumlah",
+            color="Jumlah",
+            color_continuous_scale=["#e69795", "#bc656d", "#b03031"],
+            title="Top 10 Negara Tujuan"
+        )
+    
+        fig2.update_traces(texttemplate='%{text}', textposition='outside')
+    
+        max_value = max(top_10_country["Jumlah"])
+        y_range_max = max_value * 1.2
+        
+        fig2.update_layout(xaxis_title="Negara", yaxis_title="Jumlah", yaxis=dict(range=[0, y_range_max]))
+    else:
+        fig2 = go.Figure()
+        fig2.add_annotation(
+            text="❌ Kolom 'Negara Tujuan' tidak tersedia pada file",
+            x=0.5, y=0.5,
+            showarrow=False
+        )
 
     # ========================
     # 3. MAP KOTA PERUSAHAAN EKSPOR
     # ========================
-    city_counts = df_filtered['Kota'].value_counts().reset_index()
-    city_counts.columns = ['Kota', 'Jumlah']
-    
-    df_map = pd.merge(df_city, city_counts, on='Kota', how='inner')
-    
-    if not df_map.empty:
-        df_map["Kota_Label"] = df_map["Kota"] + " (" + df_map["Jumlah"].astype(str) + ")"
+    if "Alamat Perusahaan" in df_filtered.columns:
+        city_counts = df_filtered['Kota'].value_counts().reset_index()
+        city_counts.columns = ['Kota', 'Jumlah']
         
-        fig3 = px.scatter_mapbox(
-            df_map,
-            lat="lat",
-            lon="lon",
-            hover_name="Kota",
-            hover_data={"Jumlah": True, "lat": False, "lon": False},
-            color="Kota_Label",   
-            zoom=4,
-            title="Sebaran Kota Perusahaan Eksportir"
-        )
+        df_map = pd.merge(df_city, city_counts, on='Kota', how='inner')
         
-        fig3.update_traces(marker=dict(size=12, opacity=0.8))
-        
-        fig3.update_layout(
-            mapbox_style="carto-positron",
-            legend_title="Kota (Jumlah)",
-            margin={"r":0,"t":50,"l":0,"b":0},
-            title=dict(
-                text="Sebaran Kota Perusahaan Eksportir",
-                x=0.0,  # pojok kiri
-                xanchor="left"
+        if not df_map.empty:
+            df_map["Kota_Label"] = df_map["Kota"] + " (" + df_map["Jumlah"].astype(str) + ")"
+            
+            fig3 = px.scatter_mapbox(
+                df_map,
+                lat="lat",
+                lon="lon",
+                hover_name="Kota",
+                hover_data={"Jumlah": True, "lat": False, "lon": False},
+                color="Kota_Label",   
+                zoom=4,
+                title="Sebaran Kota Perusahaan Eksportir"
             )
-        )
+            
+            fig3.update_traces(marker=dict(size=12, opacity=0.8))
+            
+            fig3.update_layout(
+                mapbox_style="carto-positron",
+                legend_title="Kota (Jumlah)",
+                margin={"r":0,"t":50,"l":0,"b":0},
+                title=dict(
+                    text="Sebaran Kota Perusahaan Eksportir",
+                    x=0.0,  # pojok kiri
+                    xanchor="left"
+                )
+            )
+        else:
+            # Jika tidak ada data kota yang cocok
+            fig3 = go.Figure()
+            fig3.add_annotation(text="Tidak ada data kota yang tersedia", 
+                              xref="paper", yref="paper", x=0.5, y=0.5, showarrow=False)
+            fig3.update_layout(title="Sebaran Kota Perusahaan Eksportir")
     else:
-        # Jika tidak ada data kota yang cocok
         fig3 = go.Figure()
-        fig3.add_annotation(text="Tidak ada data kota yang tersedia", 
-                          xref="paper", yref="paper", x=0.5, y=0.5, showarrow=False)
-        fig3.update_layout(title="Sebaran Kota Perusahaan Eksportir")
+        fig3.add_annotation(
+            text="❌ Kolom 'Alamat Perusahaan' tidak tersedia pada file",
+            x=0.5, y=0.5,
+            showarrow=False
+        )
 
     # ========================
     # 4. BAR CHART PERUSAHAAN EXPORTIR
     # ========================
-    top_10_company = df_filtered['Nama Exportir/Importir'].value_counts().head(10).reset_index()
-    top_10_company.columns = ["Perusahaan", "Jumlah"]
+    if "Nama Exportir/Importir" in df_filtered.columns:
+        top_10_company = df_filtered['Nama Exportir/Importir'].value_counts().head(10).reset_index()
+        top_10_company.columns = ["Perusahaan", "Jumlah"]
+        
+        fig4 = px.bar(
+            top_10_company,
+            x="Perusahaan",
+            y="Jumlah",
+            text="Jumlah", 
+            color="Jumlah",
+            color_continuous_scale="plasma",
+            title="Top 10 Perusahaan Ekspor Paling Banyak"
+        )
+        
+        fig4.update_traces(texttemplate='%{text}', textposition='outside')
     
-    fig4 = px.bar(
-        top_10_company,
-        x="Perusahaan",
-        y="Jumlah",
-        text="Jumlah", 
-        color="Jumlah",
-        color_continuous_scale="plasma",
-        title="Top 10 Perusahaan Ekspor Paling Banyak"
-    )
-    
-    fig4.update_traces(texttemplate='%{text}', textposition='outside')
-
-    max_value = max(top_10_company["Jumlah"])
-    y_range_max = max_value * 1.2
-    
-    fig4.update_layout(
-        xaxis_title="Perusahaan",
-        yaxis_title="Jumlah",
-        yaxis=dict(range=[0, y_range_max])
-    )
+        max_value = max(top_10_company["Jumlah"])
+        y_range_max = max_value * 1.2
+        
+        fig4.update_layout(
+            xaxis_title="Perusahaan",
+            yaxis_title="Jumlah",
+            yaxis=dict(range=[0, y_range_max])
+        )
+    else:
+        fig4 = go.Figure()
+        fig4.add_annotation(
+            text="❌ Kolom 'Nama Exportir/Importir' tidak tersedia pada file",
+            x=0.5, y=0.5,
+            showarrow=False
+        )
 
     # ========================
     # 5. LINE CHART TIMELINE
     # ========================
-    timeline = df_filtered.groupby("Diterbitkan Tanggal").size().reset_index(name="Jumlah")
-
-    fig5 = px.line(
-        timeline,
-        x="Diterbitkan Tanggal",
-        y="Jumlah",
-        markers=True,
-        title="Tren Jumlah Ekspor"
-    )
-
-    fig5.update_traces(
-        line=dict(color="royalblue", width=2),
-        marker=dict(size=8, color="orange"),
-        hovertemplate="<b>Tanggal:</b> %{x|%d %B %Y}<br><b>Jumlah:</b> %{y}<extra></extra>"
-    )
-
-    fig5.update_layout(
-        xaxis=dict(title="Tanggal", showgrid=True, gridcolor="lightgrey", tickformat="%b %Y"),
-        yaxis=dict(title="Jumlah", showgrid=True, gridcolor="lightgrey"),
-        plot_bgcolor="white",
-        hovermode="x unified"
-    )
+    if "Diterbitkan Tanggal" in df_filtered.columns:
+        timeline = df_filtered.groupby("Diterbitkan Tanggal").size().reset_index(name="Jumlah")
+    
+        fig5 = px.line(
+            timeline,
+            x="Diterbitkan Tanggal",
+            y="Jumlah",
+            markers=True,
+            title="Tren Jumlah Ekspor"
+        )
+    
+        fig5.update_traces(
+            line=dict(color="royalblue", width=2),
+            marker=dict(size=8, color="orange"),
+            hovertemplate="<b>Tanggal:</b> %{x|%d %B %Y}<br><b>Jumlah:</b> %{y}<extra></extra>"
+        )
+    
+        fig5.update_layout(
+            xaxis=dict(title="Tanggal", showgrid=True, gridcolor="lightgrey", tickformat="%b %Y"),
+            yaxis=dict(title="Jumlah", showgrid=True, gridcolor="lightgrey"),
+            plot_bgcolor="white",
+            hovermode="x unified"
+        )
+    else:
+        fig5 = go.Figure()
+        fig5.add_annotation(
+            text="❌ Kolom 'Diterbitkan Tanggal' tidak tersedia pada file",
+            x=0.5, y=0.5,
+            showarrow=False
+        )
 
     # ========================
     # 6. MAP NEGARA TUJUAN
     # ========================
-    country_counts = df_filtered['Negara Tujuan'].value_counts().reset_index()
-    country_counts.columns = ["Negara", "Jumlah"]
-    country_counts["ISO3"] = country_counts["Negara"].apply(get_iso3)
-
-    country_counts["Legend_Label"] = country_counts.apply(
-    lambda x: f"{x['Negara']} ({x['Jumlah']})", axis=1
-    )
-
-    top_labels = country_counts.head(5)
-
-    color_palettes = [
-    px.colors.qualitative.Plotly,
-    px.colors.qualitative.Dark24,
-    px.colors.qualitative.Light24,
-    px.colors.qualitative.Set1,
-    px.colors.qualitative.Set2,
-    px.colors.qualitative.Set3,
-    px.colors.qualitative.Pastel1,
-    px.colors.qualitative.Pastel2
-    ]
+    fig6 = go.Figure()
+    if "Negara Tujuan" in df_filtered.columns:
+        country_counts = df_filtered['Negara Tujuan'].value_counts().reset_index()
+        country_counts.columns = ["Negara", "Jumlah"]
+        country_counts["ISO3"] = country_counts["Negara"].apply(get_iso3)
     
-    all_colors = []
-    for palette in color_palettes:
-        all_colors.extend(palette)
+        country_counts["Legend_Label"] = country_counts.apply(
+        lambda x: f"{x['Negara']} ({x['Jumlah']})", axis=1
+        )
     
-    unique_colors = list(dict.fromkeys(all_colors))
-
-    fig6 = px.choropleth(
-        country_counts,
-        locations="Negara",
-        locationmode="country names",
-        color="Legend_Label",
-        hover_name="Negara",
-        hover_data={"Jumlah": True, "Negara": False},
-        color_discrete_sequence=unique_colors,
-        category_orders={"Legend_Label": country_counts["Legend_Label"].tolist()},
-        title="Sebaran Negara Tujuan"
-    )
-
-    for _, row in top_labels.iterrows():
-        fig6.add_trace(go.Scattergeo(
+        top_labels = country_counts.head(5)
+    
+        color_palettes = [
+        px.colors.qualitative.Plotly,
+        px.colors.qualitative.Dark24,
+        px.colors.qualitative.Light24,
+        px.colors.qualitative.Set1,
+        px.colors.qualitative.Set2,
+        px.colors.qualitative.Set3,
+        px.colors.qualitative.Pastel1,
+        px.colors.qualitative.Pastel2
+        ]
+        
+        all_colors = []
+        for palette in color_palettes:
+            all_colors.extend(palette)
+        
+        unique_colors = list(dict.fromkeys(all_colors))
+    
+        fig6 = px.choropleth(
+            country_counts,
+            locations="Negara",
             locationmode="country names",
-            locations=[row["Negara"]],
-            text=row["ISO3"],
-            mode="text",
-            showlegend=False,
-            textfont=dict(size=9, color="black", weight="bold"),
-            hoverinfo="skip"
-        ))
-
-    fig6.update_layout(geo=dict(showframe=False, showcoastlines=True, projection_type='natural earth'))
+            color="Legend_Label",
+            hover_name="Negara",
+            hover_data={"Jumlah": True, "Negara": False},
+            color_discrete_sequence=unique_colors,
+            category_orders={"Legend_Label": country_counts["Legend_Label"].tolist()},
+            title="Sebaran Negara Tujuan"
+        )
+    
+        for _, row in top_labels.iterrows():
+            fig6.add_trace(go.Scattergeo(
+                locationmode="country names",
+                locations=[row["Negara"]],
+                text=row["ISO3"],
+                mode="text",
+                showlegend=False,
+                textfont=dict(size=9, color="black", weight="bold"),
+                hoverinfo="skip"
+            ))
+    
+        fig6.update_layout(geo=dict(showframe=False, showcoastlines=True, projection_type='natural earth'))
+    else:
+        fig6.add_annotation(
+            text="❌ Kolom 'Negara Tujuan' tidak tersedia pada file",
+            x=0.5, y=0.5,
+            showarrow=False
+        )
 
     # ========================
     # TAMPILKAN DI STREAMLIT
     # ========================
-    st.plotly_chart(fig1, use_container_width=True)
-    
+    st.plotly_chart(fig1, use_container_width=True, key="fig1_komoditas")
+
     col1, col2 = st.columns(2)
     with col1:
-        st.plotly_chart(fig2, use_container_width=True)
+        st.plotly_chart(fig2, use_container_width=True, key="fig2_negara")
     with col2:
-        st.plotly_chart(fig4, use_container_width=True)
-
-    st.plotly_chart(fig3, use_container_width=True)
-    st.plotly_chart(fig6, use_container_width=True)
-    st.plotly_chart(fig5, use_container_width=True)
+        st.plotly_chart(fig4, use_container_width=True, key="fig4_perusahaan")
+    
+    st.plotly_chart(fig3, use_container_width=True, key="fig3_map_kota")
+    
+    st.plotly_chart(fig6, use_container_width=True, key="fig6_map_negara")
+    
+    st.plotly_chart(fig5, use_container_width=True, key="fig5_timeline")
   
 else:
     st.info("📥 Silakan upload file CSV/Excel untuk memulai.")
