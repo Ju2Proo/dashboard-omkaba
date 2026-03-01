@@ -1,9 +1,13 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
+import re
+from dateutil import parser
 import plotly.express as px
 import plotly.graph_objects as go
 import pycountry
 from datetime import datetime, date
+from dateutil import parser
 import plotly.io as pio
 from reportlab.lib.pagesizes import letter, A4
 from reportlab.platypus import SimpleDocTemplate, Image, Paragraph, Spacer, PageBreak, BaseDocTemplate, PageTemplate, Frame
@@ -130,6 +134,67 @@ def create_logo_page_template(logo_path):
     )
     
     return template
+
+def detect_date_format(series, sample_size=100):
+    """
+    Mendeteksi apakah data dominan DD-MM atau MM-DD
+    """
+    sample = series.dropna().astype(str).head(sample_size)
+
+    ddmm = 0
+    mmdd = 0
+
+    for val in sample:
+        m = re.match(r"(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})", val)
+        if not m:
+            continue
+
+        a, b, _ = map(int, m.groups())
+
+        if a > 12:
+            ddmm += 1
+        elif b > 12:
+            mmdd += 1
+
+    if ddmm > mmdd:
+        return "DDMM"
+    elif mmdd > ddmm:
+        return "MMDD"
+    else:
+        return "UNKNOWN"
+
+def smart_parse_column(series):
+    fmt = detect_date_format(series)
+
+    parsed_dates = []
+
+    for val in series:
+        if pd.isna(val):
+            parsed_dates.append(pd.NaT)
+            continue
+
+        val = str(val).strip()
+
+        # Excel serial number
+        if val.isdigit():
+            num = int(val)
+            if 30000 < num < 50000:
+                parsed_dates.append(
+                    pd.to_datetime(num, unit="D", origin="1899-12-30")
+                )
+                continue
+
+        try:
+            if fmt == "DDMM":
+                parsed_dates.append(pd.to_datetime(val, dayfirst=True))
+            elif fmt == "MMDD":
+                parsed_dates.append(pd.to_datetime(val, dayfirst=False))
+            else:
+                parsed_dates.append(parser.parse(val, fuzzy=True))
+        except:
+            parsed_dates.append(pd.NaT)
+
+    return pd.Series(parsed_dates)
 
 def safe_add_figure(figures_dict, title, build_func):
     """
@@ -370,8 +435,10 @@ def create_excel_report(df_filtered, date_range, total_records, filtered_records
         df_export = df_filtered[available_columns].copy()
         
         # Format tanggal untuk Excel
-        if 'Diterbitkan Tanggal' in df_export.columns:
-            df_export['Diterbitkan Tanggal'] = df_export['Diterbitkan Tanggal'].dt.strftime('%d-%m-%Y')
+        if "Diterbitkan Tanggal" in df_export.columns:
+            df_export["Diterbitkan Tanggal"] = pd.to_datetime(
+                df_export["Diterbitkan Tanggal"], errors="coerce"
+            ).dt.strftime("%d-%m-%Y")
         
         # Urutkan berdasarkan tanggal
         if 'Diterbitkan Tanggal' in df_export.columns:
@@ -539,12 +606,21 @@ if uploaded_file is not None:
     
     # Konversi kolom tanggal
     if "Diterbitkan Tanggal" in df.columns:
-        df["Diterbitkan Tanggal"] = pd.to_datetime(
-            df["Diterbitkan Tanggal"], dayfirst=True, errors="coerce"
-        )
+        df["Diterbitkan Tanggal"] = smart_parse_column(df["Diterbitkan Tanggal"])
+    
+        invalid = df["Diterbitkan Tanggal"].isna().sum()
+        total = len(df)
+    
+        st.warning(f"⚠️ {invalid} dari {total} baris tanggal tidak valid")
+    
+        if invalid == total:
+            st.error("❌ Semua tanggal gagal diparsing. Periksa format data.")
+            st.stop()
+
         df = df.dropna(subset=["Diterbitkan Tanggal"])
+
     else:
-        st.error("❌ Kolom 'Diterbitkan Tanggal' tidak tersedia. Filter tanggal dan grafik berbasis waktu dinonaktifkan.")
+        st.error("❌ Kolom 'Diterbitkan Tanggal' tidak tersedia.")
     
     st.success("✅ File berhasil diupload!")
 
@@ -571,6 +647,10 @@ if uploaded_file is not None:
         
         min_date = df["Diterbitkan Tanggal"].min().date()
         max_date = df["Diterbitkan Tanggal"].max().date()
+
+        if pd.isna(min_date) or pd.isna(max_date):
+            st.error("❌ Kolom tanggal tidak bisa diproses dengan benar")
+            st.stop()
     
         if pd.isna(min_date) or pd.isna(max_date):
             st.sidebar.warning("⚠️ Rentang tanggal tidak dapat ditentukan (semua NaT)")
